@@ -1927,7 +1927,7 @@ function renderStock() {
       <div class="tbar">
         <div>Позиций <b>${list.length}</b></div>
         <div>Единиц <b>${nf.format(t.units)}</b></div>
-        <div>Стоимость склада <b>${money(t.cost)}</b></div>
+        <div>Стоимость по закупке <b>${money(t.cost)}</b></div>
         <div>Потенциал выручки <b>${money(t.rev)}</b></div>
         <div>Потенциал прибыли <b class="${t.profit >= 0 ? 'pos' : 'neg'}">${money(t.profit)}</b></div>
       </div>
@@ -2874,7 +2874,7 @@ function aSummary() {
   return `<b>Сводка по магазину</b>
   <div class="acard">
     ${aRow('Позиций / единиц', p.rows.length + ' / ' + nf.format(t.units))}
-    ${aRow('Стоимость склада', money(t.cost))}
+    ${aRow('Стоимость по закупке', money(t.cost))}
     ${aRow('Потенциал выручки', money(t.rev))}
     ${aRow('Потенциал прибыли', money(t.profit), t.profit >= 0 ? 'pos' : 'neg')}
     ${aRow('Маржа склада', pctf(t.margin))}
@@ -3109,7 +3109,7 @@ function doImport(form) {
 }
 
 function exportCsv() {
-  const head = ['Название', 'Категория', 'Остаток', 'Закупка', 'Доставка', 'Подготовка', 'Цена', 'Канал', 'Скорость', 'Покрытие, дн', 'Макс. закуп', 'Прибыль/шт', 'Маржа %', 'Стоимость склада'];
+  const head = ['Название', 'Категория', 'Остаток', 'Закупка', 'Доставка', 'Подготовка', 'Цена', 'Канал', 'Скорость', 'Покрытие, дн', 'Макс. закуп', 'Прибыль/шт', 'Маржа %', 'Стоимость по закупке'];
   const lines = [head.join(';')];
   purchaseRows().forEach((r) => {
     const c = calcItem(r.it, r.ch, r.price);
