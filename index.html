@@ -682,8 +682,8 @@ function newFlags(on = []) {
 function baseItem(o) {
   return Object.assign({
     id: uid(), name: '', category: 'Прочее', qty: 1, cost: 0, inbound: 0, prep: 0,
-    price: 0, marketPrice: 0, channel: 'avito', velocity: 0, note: '',
-    pfId: null, image: '', url: '', oldPrice: 0, desc: '', marketAuto: false,
+    price: 0, channel: 'avito', velocity: 0, note: '',
+    pfId: null, image: '', url: '', oldPrice: 0, desc: '',
     gone: false, syncedAt: 0, velocityMode: 'auto', history: [],
     flags: newFlags(['photos', 'description', 'delivery', 'fastReply'])
   }, o);
@@ -712,10 +712,12 @@ function blankState() {
 function normalizeItem(it) {
   const base = baseItem({});
   const out = Object.assign(base, it || {});
+  delete out.marketPrice;
+  delete out.marketAuto;
   out.id = it && it.id ? String(it.id) : uid();
   out.qty = Math.max(0, n(out.qty));
   out.cost = n(out.cost); out.inbound = n(out.inbound); out.prep = n(out.prep);
-  out.price = n(out.price); out.marketPrice = n(out.marketPrice); out.velocity = Math.max(0, n(out.velocity));
+  out.price = n(out.price); out.velocity = Math.max(0, n(out.velocity));
   out.oldPrice = Math.max(0, n(out.oldPrice));
   out.name = String(out.name || '').trim();
   out.category = String(out.category || 'Прочее');
@@ -723,7 +725,6 @@ function normalizeItem(it) {
   out.image = String(out.image || '');
   out.url = String(out.url || '');
   out.desc = String(out.desc || '');
-  out.marketAuto = !!out.marketAuto;
   out.gone = !!out.gone;
   out.syncedAt = n(out.syncedAt);
   out.velocityMode = out.velocityMode === 'manual' ? 'manual' : 'auto';
@@ -908,7 +909,7 @@ async function syncStore(opts) {
           name: String(p.title || 'Товар ' + pid),
           category: CAT_RU[String(p.category || '').toLowerCase()] || 'Прочее',
           channel: 'avito', qty: 0, velocity: 0, velocityMode: 'auto',
-          marketAuto: true, history: []
+          history: []
         });
         S.items.push(it);
         created++;
@@ -937,7 +938,6 @@ async function syncStore(opts) {
       if (isNew) it.history = [{ t: now, q: stock }];
       else storeSnapshotPush(it, stock, now);
 
-      if (it.marketAuto) it.marketPrice = oldPrice > price * 1.05 ? oldPrice : 0;
       it.flags = Object.assign({}, it.flags, {
         photos: images.length >= 3,
         description: !!(desc || p.desc_file)
@@ -1022,8 +1022,7 @@ function purchaseRow(it) {
   const si = stockInfo(it);
   const best = bestChannelFor(it);
   const ch = best ? best.ch : channelOf(it.channel);
-  const basePrice = n(it.price) || marketPriceOf(it);
-  const market = marketPriceOf(it);
+  const basePrice = n(it.price) || Math.round(n(it.cost) * 1.5);
   const marginPct = n(S.settings.targetMargin);
   const cost = n(it.cost);
   const known = cost > 0;
@@ -1033,7 +1032,6 @@ function purchaseRow(it) {
   const alt = S.channels.filter((c) => c.id !== ch.id)[0];
   const altNet = alt ? netProceeds(it, alt, basePrice) : 0;
   const net = netProceeds(it, ch, basePrice);
-  const delta = market > 0 ? ((basePrice - market) / market) * 100 : 0;
 
   let verdict = 'ok', label = 'Достаточно', cls = 'reco-wait';
   if (known && maxCostBE > 0 && cost > maxCostBE) { verdict = 'no'; label = 'Не закупать: экономика минус'; cls = 'reco-no'; }
@@ -1047,7 +1045,7 @@ function purchaseRow(it) {
   const priority = (si.qty <= 0 ? 2 : 0) + (si.urgent || 0) + (marginNow == null ? 0 : Math.max(0, Math.min(30, marginNow)) / 100);
 
   return {
-    it, si, ch, alt, price: basePrice, market, delta, cost, known, marginPct,
+    it, si, ch, alt, price: basePrice, cost, known, marginPct,
     maxCostTarget, maxCostBE, unitPlan, net, altNet, marginNow,
     verdict, label, cls, priority, reco: si.reco, fit: 0, sum: 0, overBudget: false
   };
@@ -1114,7 +1112,7 @@ function planText() {
 const channelOf = (id) => S.channels.find((c) => c.id === id) || S.channels[0];
 const getItem = (id) => S.items.find((x) => x.id === id);
 const unitInvested = (it) => n(it.cost) + n(it.inbound) + n(it.prep);
-const marketPriceOf = (it) => (n(it.marketPrice) > 0 ? n(it.marketPrice) : n(it.price) * 1.06);
+const priceAnchor = (it) => Math.max(n(it.price), n(it.cost) * 1.5, 1);
 
 function taxOf(beforeTax, gross, mode) {
   if (mode === 'self' || mode === 'usn6') return Math.max(0, gross) * 0.06;
@@ -1161,20 +1159,20 @@ function listingScore(it) {
 }
 
 function demandAt(it, ch, price) {
-  const market = marketPriceOf(it);
+  const anchor = priceAnchor(it);
   const base = Math.max(0.5, n(it.velocity) || n(S.settings.defaultVelocity) || 5);
   const e = clamp(n(S.settings.elasticity) || 1.8, 0.6, 4);
   if (!(price > 0)) return 0;
-  let q = base * Math.pow(market / price, e);
-  // Выше рынка спрос падает не плавно, а обвалом: покупатель просто пролистывает.
-  if (price > market) q *= Math.exp(-1.2 * (price / market - 1));
+  let q = base * Math.pow(anchor / price, e);
+  // Выше текущей цены спрос падает не плавно, а обвалом: покупатель просто пролистывает.
+  if (price > anchor) q *= Math.exp(-1.2 * (price / anchor - 1));
   q *= 0.55 + (listingScore(it) / 100) * 0.9;
   return clamp(q, 0.15, base * 3);
 }
 
 function shareAt(it, price) {
-  const market = marketPriceOf(it);
-  const delta = market > 0 ? (price - market) / market : 0;
+  const anchor = priceAnchor(it);
+  const delta = (price - anchor) / anchor;
   let share = 20 * Math.exp(-2.4 * delta) * (0.55 + (listingScore(it) / 100) * 0.9);
   return clamp(share, 1, 75);
 }
@@ -1190,11 +1188,11 @@ function roundPrice(p) {
 
 function optimalPrice(it, chArg) {
   const ch = chArg || channelOf(it.channel);
-  const market = marketPriceOf(it);
+  const anchor = priceAnchor(it);
   const be = breakevenPrice(it, ch);
-  const lo = Math.max(be * 1.002, market * 0.5, 1);
-  // Не рекомендуем цены, оторванные от рынка: максимум +12% к конкурентам.
-  const hi = Math.max(lo * 1.05, market * 1.12);
+  const lo = Math.max(be * 1.002, anchor * 0.5, 1);
+  // Не уводим рекомендацию слишком далеко от текущей цены: максимум +35%.
+  const hi = Math.max(lo * 1.05, anchor * 1.35);
   let bestP = n(it.price), bestV = -Infinity;
   const N = 90;
   for (let i = 0; i <= N; i++) {
@@ -1217,7 +1215,7 @@ function totals(chOverride) {
     profit += c.profit * q;
     fee += c.fee * q;
     tax += c.tax * q;
-    cost += c.invested * q;
+    cost += n(it.cost) * q;
     units += q;
   });
   return {
@@ -1298,17 +1296,11 @@ function buildInsights(limit = 6) {
       text: 'Пока не введена закупочная цена, маржа и максимальная цена закупа считаются по целевой марже — это ориентир, а не факт. Заполните поле «Закупка» на складе.'
     });
   }
-  const above = rows.filter((r) => r.market > 0 && r.price > r.market * 1.1);
-  const below = rows.filter((r) => r.market > 0 && r.price < r.market * 0.9 && r.it.qty > 0);
-  if (above.length) {
+  const belowBe = rows.filter((r) => r.known && r.price > 0 && breakevenPrice(r.it, r.ch) > r.price);
+  if (belowBe.length) {
     out.push({
-      type: 'warn', icon: '↑', title: `Цена выше рынка: ${above.length}`,
-      text: above.slice(0, 3).map((r) => `${r.it.name} (+${Math.round(r.delta)}%)`).join(', ') + '. На Avito покупатель сравнит за 30 секунд. Либо обоснуйте цену, либо снижайте.'
-    });
-  } else if (below.length) {
-    out.push({
-      type: 'good', icon: '↓', title: 'Есть запас по цене',
-      text: below.slice(0, 3).map((r) => r.it.name).join(', ') + ' стоят ниже рыночного ориентира — можно поднять на 5–10% без потери спроса.'
+      type: 'bad', icon: '↓', title: `Цена ниже безубытка: ${belowBe.length}`,
+      text: belowBe.slice(0, 3).map((r) => `${r.it.name} (нужно ${money(breakevenPrice(r.it, r.ch))})`).join(', ') + '. Каждая продажа убыточна — поднимите цену или снизьте закупку.'
     });
   }
   const t = totals();
@@ -1316,7 +1308,7 @@ function buildInsights(limit = 6) {
     out.push({ type: 'warn', icon: '%', title: `Маржа склада ${pctf(t.margin)}`, text: 'Возврат или скидка 10% съест прибыль. Целевой ориентир для перепродажи — 25–40%.' });
   }
   if (!out.length) {
-    out.push({ type: 'good', icon: '✓', title: 'Склад в порядке', text: 'Остатков хватает, закупочные цены проходят по марже, цены в рынке. Можно докупать ходовые позиции.' });
+    out.push({ type: 'good', icon: '✓', title: 'Склад в порядке', text: 'Остатков хватает, закупочные цены проходят по марже, цены выше безубытка. Можно докупать ходовые позиции.' });
   }
   return out.slice(0, limit);
 }
@@ -1583,7 +1575,6 @@ const CSV_MAP = [
   { field: 'cost', keys: ['закуп', 'себестоим', 'cost', 'входная'] },
   { field: 'inbound', keys: ['доставк', 'логистик', 'inbound'] },
   { field: 'prep', keys: ['подготов', 'упаков', 'prep'] },
-  { field: 'marketPrice', keys: ['рын', 'market', 'конкур'] },
   { field: 'price', keys: ['цена прод', 'цена', 'price', 'продаж'] },
   { field: 'velocity', keys: ['скорост', 'velocity', 'в месяц', 'в мес'] },
   { field: 'channel', keys: ['канал', 'площадк', 'channel', 'маркет'] }
@@ -1621,7 +1612,6 @@ function itemsFromCsv(text) {
       qty: n(cell('qty')) || 1,
       cost, inbound: n(cell('inbound')), prep: n(cell('prep')),
       price,
-      marketPrice: n(cell('marketPrice')),
       velocity: n(cell('velocity')) || n(S.settings.defaultVelocity) || 5,
       channel: channelFromText(cell('channel')),
       note: 'Импортировано из CSV'
@@ -1633,7 +1623,7 @@ function itemsFromCsv(text) {
 const VIEW_META = {
   dashboard: ['Обзор', 'Склад, прибыль и что закупать — по данным магазина'],
   stock: ['Склад', 'Живые остатки, закупка и покрытие в днях'],
-  purchase: ['Закуп', 'Сколько и по какой цене закупать с учётом остатков и рынка'],
+  purchase: ['Закуп', 'Сколько и по какой цене закупать с учётом остатков и скорости'],
   channels: ['Площадки', 'Avito и Telegram: где выгоднее продавать'],
   buyer: ['Покупатель', 'Как вас видит покупатель и сколько он готов заплатить'],
   agent: ['Агент', 'Спросите про склад и закуп — агент посчитает и объяснит'],
@@ -1650,7 +1640,7 @@ function renderSide() {
     <div class="ss-title">Магазин</div>
     <div class="ss-row"><span>Товаров</span><b>${S.items.filter((i) => !i.gone).length}</b></div>
     <div class="ss-row"><span>На складе</span><b>${nf.format(t.units)} шт</b></div>
-    <div class="ss-row"><span>Стоимость</span><b>${money(t.inv)}</b></div>
+    <div class="ss-row"><span>Стоимость</span><b>${money(t.cost)}</b></div>
     <div class="ss-row"><span>Прибыль склада</span><b class="${t.profit >= 0 ? 'pos' : 'neg'}">${money(t.profit)}</b></div>
     <div class="ss-row"><span>К закупу</span><b class="warn">${p.needUnits} шт</b></div>
     <div class="ss-row"><span>Синхронизация</span><b class="mini">${esc(st.text)}</b></div>`;
@@ -1746,7 +1736,7 @@ function renderDashboard() {
     ${syncStrip()}
     <div class="grid kpi" style="margin-bottom:14px">
       <div class="kpi"><div class="k-label">На складе</div><div class="k-val">${nf.format(t.units)} шт</div><div class="k-sub">${rows.filter((r) => r.si.qty > 0).length} из ${rows.length} позиций</div></div>
-      <div class="kpi"><div class="k-label">Стоимость склада</div><div class="k-val">${money(t.inv)}</div><div class="k-sub">${p.missingCost.length ? `у ${p.missingCost.length} нет закупки` : 'по введённым закупкам'}</div></div>
+      <div class="kpi"><div class="k-label">Стоимость склада</div><div class="k-val">${money(t.cost)}</div><div class="k-sub">${p.missingCost.length ? `у ${p.missingCost.length} нет закупки` : 'остаток × закупка'}</div></div>
       <div class="kpi"><div class="k-label">Потенциал прибыли</div><div class="k-val ${t.profit >= 0 ? 'pos' : 'neg'}">${money(t.profit)}</div><div class="k-sub">маржа ${pctf(t.margin)}</div></div>
       <div class="kpi"><div class="k-label">Нужно закупить</div><div class="k-val warn">${nf.format(p.needUnits)} шт</div><div class="k-sub">${money(p.needMoney)} по плану</div></div>
       <div class="kpi"><div class="k-label">Нет в наличии</div><div class="k-val ${p.outStock.length ? 'neg' : 'pos'}">${p.outStock.length}</div><div class="k-sub">${p.over.length} с излишком</div></div>
@@ -1876,7 +1866,6 @@ function renderStock() {
         </div>
       </td>
       <td style="width:96px" data-label="Цена"><input class="cell-in num" type="number" min="0" step="10" data-id="${it.id}" data-field="price" value="${n(it.price)}" title="Цена на витрине. Меняется в магазине, здесь — для расчёта"/></td>
-      <td style="width:96px" data-label="Рынок"><input class="cell-in num" type="number" min="0" step="10" data-id="${it.id}" data-field="marketPrice" value="${n(it.marketPrice)}" placeholder="рынок"/></td>
       <td class="num" data-scalc="profit" data-label="Приб./шт">${money(c.profit)}</td>
       <td class="num" data-scalc="margin" data-label="Маржа">${pctf(c.margin)}</td>
       <td data-scalc="cov" data-label="Покрытие">${covCell(si)}</td>
@@ -1926,10 +1915,10 @@ function renderStock() {
         <button class="btn primary sm" data-action="add-item">+ Товар</button>
       </div>
       <div class="tbl-wrap">
-        <table class="tbl" style="min-width:1240px">
+        <table class="tbl" style="min-width:1140px">
           <thead><tr>
             <th>Товар</th><th class="num">Остаток</th><th class="num">Закупка / расходы</th>
-            <th class="num">Цена</th><th class="num">Рынок</th><th class="num">Приб./шт</th><th class="num">Маржа</th>
+            <th class="num">Цена</th><th class="num">Приб./шт</th><th class="num">Маржа</th>
             <th>Покрытие</th><th class="num">Скорость</th><th>Канал</th><th></th>
           </tr></thead>
           <tbody>${list.map(row).join('')}</tbody>
@@ -1938,11 +1927,11 @@ function renderStock() {
       <div class="tbar">
         <div>Позиций <b>${list.length}</b></div>
         <div>Единиц <b>${nf.format(t.units)}</b></div>
-        <div>Стоимость склада <b>${money(t.inv)}</b></div>
+        <div>Стоимость склада <b>${money(t.cost)}</b></div>
         <div>Потенциал выручки <b>${money(t.rev)}</b></div>
         <div>Потенциал прибыли <b class="${t.profit >= 0 ? 'pos' : 'neg'}">${money(t.profit)}</b></div>
       </div>
-      <div class="hintline">Остаток, цена и название подтягиваются из магазина. Закупка, доставка, подготовка, рынок и скорость — ваши: сохраняются при синхронизации. Скорость «по остаткам» появится после 2+ синхронизаций с интервалом от суток.</div>
+      <div class="hintline">Остаток, цена и название подтягиваются из магазина. Закупка, доставка, подготовка и скорость — ваши: сохраняются при синхронизации. Скорость «по остаткам» появится после 2+ синхронизаций с интервалом от суток.</div>
     </div>`;
 
   updateStockCalc();
@@ -1972,7 +1961,7 @@ function updateStockCalc() {
     if (vals.length >= 5) {
       vals[0].textContent = $$('#view-stock tbody tr').length;
       vals[1].textContent = nf.format(t.units);
-      vals[2].textContent = money(t.inv);
+      vals[2].textContent = money(t.cost);
       vals[3].textContent = money(t.rev);
       vals[4].textContent = money(t.profit);
       vals[4].className = t.profit >= 0 ? 'pos' : 'neg';
@@ -2041,7 +2030,7 @@ function renderPurchase() {
               <td style="min-width:220px" data-label="Товар">
                 <div class="prod">
                   ${r.it.image ? `<img class="thumb" src="${esc(r.it.image)}" alt="" loading="lazy"/>` : `<div class="thumb" style="display:grid;place-items:center;color:#41546a">◻</div>`}
-                  <div class="nm"><b>${esc(r.it.name)}</b><span>${esc(r.it.category)} · ${r.delta > 0 ? '+' : ''}${Math.round(r.delta)}% к рынку</span></div>
+                  <div class="nm"><b>${esc(r.it.name)}</b><span>${esc(r.it.category)}</span></div>
                 </div>
               </td>
               <td class="num ${r.si.qty <= 0 ? 'neg' : ''}" data-label="Остаток">${nf.format(r.si.qty)}</td>
@@ -2209,16 +2198,12 @@ function renderChannels() {
 }
 
 /* ---------- Покупатель ---------- */
-function buyerObjections(it, c, market, score) {
+function buyerObjections(it, c, score) {
   const out = [];
-  const delta = market > 0 ? ((it.price - market) / market) * 100 : 0;
   const be = breakevenPrice(it);
-  if (market > 0 && be > market * 1.02) {
-    out.push({ type: 'bad', t: 'Экономика не сходится', x: `Чтобы выйти в ноль, нужна цена ${money(be)}, а рынок — ${money(market)}. Подача объявления это не исправит: меняйте закупку, канал или откажитесь от позиции.` });
+  if (it.price > 0 && be > it.price * 1.02) {
+    out.push({ type: 'bad', t: 'Экономика не сходится', x: `Чтобы выйти в ноль, нужна цена ${money(be)}, а вы продаёте за ${money(it.price)}. Подача объявления это не исправит: меняйте закупку, канал или откажитесь от позиции.` });
   }
-  if (delta > 8) out.push({ type: 'bad', t: 'Цена выше рынка', x: `На ${Math.round(delta)}% дороже похожих предложений. Покупатель откроет 2–3 объявления и выберет дешевле, если вы не объясните, за что переплата.` });
-  else if (delta < -5) out.push({ type: 'info', t: 'Вы заметно дешевле рынка', x: `На ${Math.abs(Math.round(delta))}% ниже конкурентов. Продастся быстро, но вы недобираете примерно ${money((market - it.price) * n(it.qty))} с партии.` });
-  else out.push({ type: 'good', t: 'Цена в рынке', x: 'Разница с конкурентами в пределах 5–8% — покупатель не отсеет вас только по цене.' });
 
   if (!(it.flags && it.flags.reviews)) out.push({ type: 'warn', t: 'Нет отзывов', x: 'Первый покупатель рискует деньгами. Добавьте видеообзор, гарантию возврата или продавайте через безопасную сделку.' });
   if (!(it.flags && it.flags.warranty)) out.push({ type: 'warn', t: 'Нет гарантии', x: 'Для техники и дорогих товаров отсутствие гарантии — главная причина отказа. Дайте 14 дней на возврат: риск минимален, конверсия выше.' });
@@ -2239,25 +2224,22 @@ function renderBuyer() {
   const ch = channelOf(it.channel);
   const c = calcItem(it, ch);
   const be = breakevenPrice(it, ch);
-  const market = marketPriceOf(it);
   const opt = optimalPrice(it, ch);
   const score = listingScore(it);
   const share = shareAt(it, it.price);
-  const obj = buyerObjections(it, c, market, score);
-  const deltaPct = market > 0 ? ((it.price - market) / market) * 100 : 0;
+  const obj = buyerObjections(it, c, score);
 
-  const maxScale = Math.max(it.price, market, opt.price, be, 1) * 1.15;
+  const maxScale = Math.max(it.price, opt.price, be, 1) * 1.15;
   const pos = (v) => clamp((v / maxScale) * 100, 1.5, 98.5);
   const marks = [
     { k: 'be', label: 'Безубыток', v: be, color: '#fb7185' },
     { k: 'price', label: 'Ваша цена', v: it.price, color: '#38bdf8' },
-    { k: 'market', label: 'Рынок', v: market, color: '#f59e0b' },
     { k: 'opt', label: 'Рекомендую', v: opt.price, color: '#4ade80' }
   ];
 
   const scenarioPrices = Array.from(new Set([
     Math.round(it.price * 0.8), Math.round(it.price * 0.9), Math.round(it.price),
-    opt.price, Math.round(market)
+    opt.price
   ].filter((v) => v > 0))).sort((a, b) => a - b);
 
   const scenarios = scenarioPrices.map((p) => {
@@ -2268,8 +2250,8 @@ function renderBuyer() {
   const bestScn = scenarios.reduce((a, b) => (b.monthly > a.monthly ? b : a), scenarios[0]);
 
   const pts = [];
-  const lo = Math.max(1, Math.min(it.price * 0.6, market * 0.7));
-  const hi = Math.max(it.price * 1.45, market * 1.35, lo * 1.3);
+  const lo = Math.max(1, it.price * 0.6);
+  const hi = Math.max(it.price * 1.45, lo * 1.3);
   for (let i = 0; i <= 64; i++) {
     const p = lo + (hi - lo) * (i / 64);
     pts.push({ x: p, y: monthlyProfitAt(it, ch, p) });
@@ -2302,7 +2284,6 @@ function renderBuyer() {
             <div class="ll"><span class="dot" style="background:${m.color}"></span>${m.label}<b style="color:${m.color}">${money(m.v)}</b></div>`).join('')}
         </div>
         <div class="kv">
-          <span>Ваша цена vs рынок</span><b class="${deltaPct > 5 ? 'neg' : deltaPct < -5 ? 'warn' : 'pos'}">${deltaPct > 0 ? '+' : ''}${Math.round(deltaPct)}%</b>
           <span>Шанс, что выберут вас среди 5 похожих</span><b>${Math.round(share)}%</b>
           <span>Прогноз спроса при текущей цене</span><b>≈ ${nf1.format(demandAt(it, ch, it.price))} шт/мес</b>
           <span>Можно снизить без убытка на</span><b>${it.price > 0 ? pctf(Math.max(0, (1 - be / it.price) * 100)) : '—'}</b>
@@ -2370,8 +2351,7 @@ function renderBuyer() {
   activeCharts = [
     () => drawPriceCurve($('#cPriceCurve'), pts, [
       { x: it.price, label: 'сейчас', color: '#38bdf8' },
-      { x: opt.price, label: 'оптимум', color: '#4ade80' },
-      { x: market, label: 'рынок', color: '#f59e0b' }
+      { x: opt.price, label: 'оптимум', color: '#4ade80' }
     ])
   ];
 }
@@ -2591,7 +2571,6 @@ function aItemCard(it) {
     ${aRow('Макс. закуп', r.maxCostTarget > 0 ? money(r.maxCostTarget) : '—')}
   </div>
   <div class="acard">${verdict}<br>
-  ${r.market > 0 ? `Рынок: ${money(r.market)}, ваша цена ${r.delta > 0 ? '+' : ''}${Math.round(r.delta)}% к нему.` : 'Рыночная цена не задана — поставьте её на складе, чтобы видеть запас по цене.'}
   ${r.si.reco > 0 ? `<br>К закупу: <b>${r.si.reco} шт</b> до ${money(r.maxCostTarget)}/шт.` : '<br>Докупать пока не нужно.'}</div>`;
 }
 
@@ -2631,7 +2610,6 @@ function aPrice(it, override) {
   const ch = channelOf(it.channel);
   const cur = calcItem(it, ch);
   const be = breakevenPrice(it, ch);
-  const market = marketPriceOf(it);
   const opt = optimalPrice(it, ch);
   const curMonthly = demandAt(it, ch, it.price) * cur.profit;
   const si = stockInfo(it);
@@ -2653,14 +2631,13 @@ function aPrice(it, override) {
     <div class="acard">${cc.profit <= 0
       ? `<b class="neg">Это ниже безубытка.</b> Минимальная цена — ${money(be)}.`
       : `Запас над безубытком — ${money(override - be)}.`}
-      ${market > 0 ? ` Рынок: ${money(market)}.` : ''}
       <div style="margin-top:8px"><button class="btn sm primary" data-action="apply-price" data-id="${it.id}" data-price="${Math.round(override)}">Применить ${money(override)}</button></div>
     </div>`;
   }
 
   const gap = opt.price - it.price;
   const maxDiscount = it.price > 0 ? Math.max(0, (1 - be / it.price) * 100) : 0;
-  const hopeless = market > 0 && be > market;
+  const hopeless = it.price > 0 && be > it.price;
   return `<b>${esc(it.name)}</b> — рекомендация по цене
   <div class="acard">
     ${aRow('Сейчас', money(it.price))}
@@ -2671,11 +2648,10 @@ function aPrice(it, override) {
     ${aRow('Остаток на складе', nf.format(it.qty) + ' шт на ' + daysText(si.days))}
   </div>
   <div class="acard">${hopeless
-    ? `<b class="neg">Экономика не сходится.</b> Чтобы выйти в ноль, нужна цена ${money(be)}, а рынок — ${money(market)}. Меняйте поставщика или откажитесь от позиции.`
+    ? `<b class="neg">Экономика не сходится.</b> Чтобы выйти в ноль, нужна цена ${money(be)}, а вы продаёте за ${money(it.price)}. Меняйте поставщика или откажитесь от позиции.`
     : gap > 0
       ? `Цену можно поднять на <b>${money(gap)}</b>: спрос немного просядет, но прибыль вырастет.`
       : gap < 0 ? `Цена выше оптимума — скидка <b>${money(-gap)}</b> ускорит оборот.` : 'Цена уже близка к оптимуму.'}
-    ${market > 0 ? ` Рынок: ${money(market)}.` : ''}
     <div style="margin-top:8px"><button class="btn sm primary" data-action="apply-price" data-id="${it.id}" data-price="${opt.price}">Поставить ${money(opt.price)}</button></div>
   </div>`;
 }
@@ -2687,7 +2663,7 @@ function aStock() {
   <div class="acard">
     ${aRow('Позиций', rows.length)}
     ${aRow('Единиц', nf.format(t.units))}
-    ${aRow('Стоимость по закупке', money(t.inv))}
+    ${aRow('Стоимость по закупке', money(t.cost))}
     ${aRow('Потенциал выручки', money(t.rev))}
     ${aRow('Потенциал прибыли', money(t.profit), t.profit >= 0 ? 'pos' : 'neg')}
     ${aRow('Синхронизация', fmtAgo(S.settings.lastSync))}
@@ -2803,8 +2779,6 @@ function aRisks() {
   if (p.no.length) risks.push(`<b class="neg">Закупка дороже максимума:</b> ${p.no.map((r) => `${esc(r.it.name)} (${money(r.cost)} против ${money(r.maxCostBE)})`).join(', ')}.`);
   if (p.over.length) risks.push(`<b class="warn">Замороженные деньги:</b> ${p.over.map((r) => `${esc(r.it.name)} — ${nf.format(r.it.qty)} шт`).join(', ')}.`);
   if (p.missingCost.length) risks.push(`<b class="warn">Нет закупочной цены</b> у ${p.missingCost.length} позиций — реальная маржа неизвестна.`);
-  const above = p.rows.filter((r) => r.market > 0 && r.price > r.market * 1.1);
-  if (above.length) risks.push(`<b class="warn">Цена выше рынка:</b> ${above.map((r) => esc(r.it.name)).join(', ')}.`);
   if (!S.settings.lastSync) risks.push('<b class="warn">Магазин не синхронизирован.</b> Остатки могут быть неверными.');
   else if (Date.now() - n(S.settings.lastSync) > 86400000) risks.push(`<b class="warn">Данные устарели:</b> последняя синхронизация ${fmtAgo(S.settings.lastSync)}.`);
   if (S.settings.tax === 'none') risks.push('<b class="warn">Налог не учтён</b> — прибыль завышена на 4–15% с оборота.');
@@ -2822,8 +2796,6 @@ function aPlan() {
   if (p.no.length) steps.push(`<b>Уберите из закупа:</b> ${p.no.map((r) => esc(r.it.name)).join(', ')}. Закупочная цена выше максимальной для целевой маржи.`);
   if (p.over.length) steps.push(`<b>Распродайте излишки:</b> ${p.over.map((r) => esc(r.it.name)).join(', ')}. Скидка 5–10% вернёт деньги в оборот.`);
   if (p.missingCost.length) steps.push(`<b>Заполните закупку</b> у ${p.missingCost.length} позиций — иначе маржа и бюджет считаются по оценке.`);
-  const above = p.rows.filter((r) => r.market > 0 && r.price > r.market * 1.1);
-  if (above.length) steps.push(`<b>Проверьте цену:</b> ${above.map((r) => esc(r.it.name)).join(', ')} дороже рыночного ориентира.`);
   if (p.overBudget.length) steps.push(`<b>Бюджета не хватает</b> на ${p.overBudget.length} позиций. Увеличьте бюджет или разбейте закуп на две волны.`);
   if (S.settings.tax === 'none') steps.push('<b>Включите налог</b> в настройках — иначе решения принимаются по завышенной прибыли.');
   if (!steps.length) steps.push('Всё в порядке: остатков хватает, закупки проходят по марже. Можно тестировать повышение цены на 3–5%.');
@@ -2833,30 +2805,26 @@ function aPlan() {
 function aBuyer(it) {
   const ch = channelOf(it.channel);
   const c = calcItem(it, ch);
-  const market = marketPriceOf(it);
   const score = listingScore(it);
   const share = shareAt(it, it.price);
-  const obj = buyerObjections(it, c, market, score);
-  const delta = market > 0 ? ((it.price - market) / market) * 100 : 0;
+  const obj = buyerObjections(it, c, score);
   return `<b>Как «${esc(it.name)}» видит покупатель</b>
   <div class="acard">
     ${aRow('Цена', money(it.price))}
-    ${aRow('Рынок', n(it.marketPrice) > 0 ? money(market) : 'не указан')}
-    ${aRow('Позиция по цене', (delta > 0 ? '+' : '') + Math.round(delta) + '% к рынку', delta > 8 ? 'neg' : delta < -5 ? 'warn' : 'pos')}
+    ${aRow('Маржа', pctf(c.margin), c.margin >= 25 ? 'pos' : c.margin >= 10 ? '' : 'neg')}
     ${aRow('Шанс, что выберут вас', Math.round(share) + '%')}
     ${aRow('Сила карточки', score + '/100')}
     ${aRow('Остаток', nf.format(it.qty) + ' шт')}
   </div>
   <div class="acard"><ul>${obj.map((o) => `<li><b>${o.t}.</b> ${o.x}</li>`).join('')}</ul></div>
-  <div class="acard">Вывод: ${delta > 15
-    ? 'цена заметно выше рынка — без сильного обоснования (гарантия, комплект, бренд) покупатель не рискнёт.'
+  <div class="acard">Вывод: ${c.margin < 12
+    ? 'маржа тонкая: скидка или возврат уводят в минус. Сначала пересчитайте закупку и канал.'
     : score < 55
       ? 'дело не в цене, а в доверии. Фото, отзывы и гарантия дадут больше, чем скидка 5%.'
       : 'предложение конкурентоспособно. Можно тестировать +3–5% к цене и следить за откликом.'}</div>`;
 }
 
 function listingText(it) {
-  const market = marketPriceOf(it);
   const c = calcItem(it);
   const used = /б\/у|бу|б\.у|used/.test(norm(it.note)) || /б\/у/.test(norm(it.name));
   const cond = used ? 'б/у, в хорошем состоянии' : 'новый';
@@ -2869,7 +2837,7 @@ function listingText(it) {
   else lines.push('Проверка при встрече, показываю работу товара.');
   if (it.flags && it.flags.delivery) lines.push('Доставка по городу, Авито Доставка или СДЭК. В Telegram — отправлю photo/video и оформлю заказ.');
   else lines.push('Самовывоз, возможна встреча в центре.');
-  lines.push(`Цена ${money(it.price)}${n(it.marketPrice) > 0 && market > it.price ? ` (в магазинах — от ${money(market)})` : ''}.`);
+  lines.push(`Цена ${money(it.price)}.`);
   if (c.margin > 20) lines.push('Небольшой торг для быстрого покупателя.');
   else lines.push('Цена уже минимальная, торг символический.');
   lines.push('Пишите в сообщения — отвечу быстро, пришлю дополнительные фото и видео.');
@@ -2906,7 +2874,7 @@ function aSummary() {
   return `<b>Сводка по магазину</b>
   <div class="acard">
     ${aRow('Позиций / единиц', p.rows.length + ' / ' + nf.format(t.units))}
-    ${aRow('Стоимость склада', money(t.inv))}
+    ${aRow('Стоимость склада', money(t.cost))}
     ${aRow('Потенциал выручки', money(t.rev))}
     ${aRow('Потенциал прибыли', money(t.profit), t.profit >= 0 ? 'pos' : 'neg')}
     ${aRow('Маржа склада', pctf(t.margin))}
@@ -3061,7 +3029,6 @@ function openItemModal(id) {
         <label class="field"><span>Доставка до вас, ₽/шт</span><input name="inbound" type="number" min="0" step="10" value="${n(d.inbound)}"/></label>
         <label class="field"><span>Подготовка и упаковка, ₽/шт</span><input name="prep" type="number" min="0" step="10" value="${n(d.prep)}"/></label>
         <label class="field"><span>Цена продажи, ₽</span><input name="price" type="number" min="0" step="10" value="${n(d.price)}" placeholder="если пусто — посчитаю от закупки"/></label>
-        <label class="field"><span>Цена конкурентов (рынок), ₽</span><input name="marketPrice" type="number" min="0" step="10" value="${n(d.marketPrice)}"/></label>
         <label class="field"><span>Площадка</span><select name="channel">
           ${S.channels.map((ch) => `<option value="${ch.id}" ${ch.id === d.channel ? 'selected' : ''}>${esc(ch.name)}</option>`).join('')}
         </select></label>
@@ -3083,8 +3050,8 @@ function openImportModal() {
       <div class="modal-body" style="grid-template-columns:1fr">
         <label class="field"><span>Файл CSV (разделитель ; или табуляция)</span><input type="file" id="csvFile" accept=".csv,.txt"/></label>
         <label class="field"><span>Или вставьте таблицу сюда</span>
-          <textarea id="csvText" name="csv" rows="9" placeholder="Название;Категория;Кол-во;Закупка;Доставка;Подготовка;Цена;Рынок;Канал;Скорость
-Часы Casio;Часы;5;3200;250;100;5990;6900;Avito;3"></textarea>
+          <textarea id="csvText" name="csv" rows="9" placeholder="Название;Категория;Кол-во;Закупка;Доставка;Подготовка;Цена;Канал;Скорость
+Часы Casio;Часы;5;3200;250;100;5990;Avito;3"></textarea>
         </label>
         <div class="hintline">Первая строка — заголовки. Обязательно только «Название», остальное можно не заполнять. Канал — Avito или Telegram. Товары магазина лучше не импортировать: они подтянутся синхронизацией и сохранят свои остатки.</div>
       </div>
@@ -3109,7 +3076,6 @@ function saveItemForm(form) {
     inbound: Math.max(0, n(fd.get('inbound'))),
     prep: Math.max(0, n(fd.get('prep'))),
     price: Math.max(0, price),
-    marketPrice: Math.max(0, n(fd.get('marketPrice'))),
     channel: String(fd.get('channel') || 'avito'),
     velocity: Math.max(0, n(fd.get('velocity'))),
     note: String(fd.get('note') || '').trim()
@@ -3118,10 +3084,8 @@ function saveItemForm(form) {
   if (id && getItem(id)) {
     const it = getItem(id);
     const prevVelocity = n(it.velocity);
-    const prevMarket = n(it.marketPrice);
     Object.assign(it, data);
     if (data.velocity !== prevVelocity) it.velocityMode = 'manual';
-    if (data.marketPrice !== prevMarket) it.marketAuto = false;
   } else {
     S.items.push(normalizeItem(data));
   }
@@ -3145,14 +3109,14 @@ function doImport(form) {
 }
 
 function exportCsv() {
-  const head = ['Название', 'Категория', 'Остаток', 'Закупка', 'Доставка', 'Подготовка', 'Цена', 'Рынок', 'Канал', 'Скорость', 'Покрытие, дн', 'Макс. закуп', 'Прибыль/шт', 'Маржа %', 'Стоимость склада'];
+  const head = ['Название', 'Категория', 'Остаток', 'Закупка', 'Доставка', 'Подготовка', 'Цена', 'Канал', 'Скорость', 'Покрытие, дн', 'Макс. закуп', 'Прибыль/шт', 'Маржа %', 'Стоимость склада'];
   const lines = [head.join(';')];
   purchaseRows().forEach((r) => {
     const c = calcItem(r.it, r.ch, r.price);
     const row = [
-      r.it.name, r.it.category, n(r.it.qty), n(r.it.cost), n(r.it.inbound), n(r.it.prep), n(r.it.price), n(r.it.marketPrice),
+      r.it.name, r.it.category, n(r.it.qty), n(r.it.cost), n(r.it.inbound), n(r.it.prep), n(r.it.price),
       r.ch.name, Math.round(r.si.vel.v), r.si.days === Infinity ? '' : Math.round(r.si.days),
-      r.maxCostTarget, Math.round(c.profit), c.margin.toFixed(1).replace('.', ','), Math.round(unitInvested(r.it) * n(r.it.qty))
+      r.maxCostTarget, Math.round(c.profit), c.margin.toFixed(1).replace('.', ','), Math.round(n(r.it.cost) * n(r.it.qty))
     ];
     lines.push(row.map((x) => `"${String(x ?? '').replace(/"/g, '""')}"`).join(';'));
   });
@@ -3321,10 +3285,9 @@ document.addEventListener('input', (e) => {
     if (!it) return;
     const f = el.dataset.field;
     if (f === 'channel') it.channel = el.value;
-    else if (['qty', 'cost', 'inbound', 'prep', 'price', 'marketPrice', 'velocity'].includes(f)) {
+    else if (['qty', 'cost', 'inbound', 'prep', 'price', 'velocity'].includes(f)) {
       it[f] = Math.max(0, n(el.value));
       if (f === 'velocity') it.velocityMode = 'manual';
-      if (f === 'marketPrice') it.marketAuto = false;
     } else it[f] = el.value;
     if (f === 'name') {
       const tr = $(`tr[data-row="${it.id}"]`);
