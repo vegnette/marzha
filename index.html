@@ -339,6 +339,34 @@ canvas{display:block;width:100%}
   .chat-card{height:calc(var(--app-h) - 260px)}
 }
 
+/* ---------- простой экран: склад, поставка, реакции ---------- */
+.simple-hero .hero-value{font-size:40px;font-weight:800;letter-spacing:-.03em;line-height:1.05;margin:2px 0 4px}
+.simple-hero .hero-sub{font-size:12.5px;color:#7d8fa6}
+.mini-list{margin-top:14px;display:grid;gap:2px}
+.mini-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:7px 0;border-bottom:1px dashed #16202b;font-size:12px;color:#9fb0c4}
+.mini-row:last-child{border-bottom:none}
+.mini-row b{color:#e3ecf6;font-weight:600;white-space:nowrap;font-variant-numeric:tabular-nums}
+.supply-form{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.verdict{margin-top:12px;padding:10px 12px;border-radius:10px;font-size:12px;line-height:1.45;border:1px solid #22303e;background:#0c1218;color:#9fb0c4}
+.verdict.good{border-color:rgba(74,222,128,.25);background:rgba(74,222,128,.07);color:#a7f3c4}
+.verdict.warn{border-color:rgba(251,191,36,.25);background:rgba(251,191,36,.07);color:#fde68a}
+.verdict.bad{border-color:rgba(251,113,133,.25);background:rgba(251,113,133,.07);color:#fecdd3}
+.react-list{display:grid;gap:8px}
+.react{border:1px solid #1a2430;border-radius:12px;padding:10px 12px;background:#0c1218}
+.react .q{font-size:12.5px;font-weight:600;color:#e3ecf6}
+.react .a{font-size:11.5px;color:#8494a8;margin-top:3px;line-height:1.45}
+.react.bad{border-color:rgba(251,113,133,.28)}
+.react.warn{border-color:rgba(251,191,36,.25)}
+.react.good{border-color:rgba(74,222,128,.22)}
+@media(max-width:900px){
+  .supply-form{grid-template-columns:1fr 1fr}
+  .simple-hero .hero-value{font-size:34px}
+}
+@media(max-width:620px){
+  .supply-form{grid-template-columns:1fr}
+  .simple-hero .hero-value{font-size:30px}
+}
+
 /* ---------- телефон/планшет: нижняя навигация и карточки ---------- */
 @media(max-width:900px){
   .app{grid-template-columns:1fr;min-height:var(--app-h)}
@@ -490,7 +518,7 @@ canvas{display:block;width:100%}
     <nav class="nav" id="nav">
       <button data-action="go" data-view="dashboard" class="active">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg>
-        Обзор
+        Просто
       </button>
       <button data-action="go" data-view="stock">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 8l-9-5-9 5v8l9 5 9-5V8z"/><path d="M3 8l9 5 9-5M12 13v8"/></svg>
@@ -1621,7 +1649,7 @@ function itemsFromCsv(text) {
 }
 /* ================= интерфейс ================= */
 const VIEW_META = {
-  dashboard: ['Обзор', 'Склад, прибыль и что закупать — по данным магазина'],
+  dashboard: ['Просто', 'Сколько стоит склад, будущая поставка и реакции покупателя'],
   stock: ['Склад', 'Живые остатки, закупка и покрытие в днях'],
   purchase: ['Закуп', 'Сколько и по какой цене закупать с учётом остатков и скорости'],
   channels: ['Площадки', 'Avito и Telegram: где выгоднее продавать'],
@@ -1704,105 +1732,230 @@ function syncStrip() {
   </div>`;
 }
 
+/* ---------- Просто: склад, будущая поставка, реакции ---------- */
+function supplyState() {
+  if (!S.ui.supply || typeof S.ui.supply !== 'object') S.ui.supply = {};
+  const st = S.ui.supply;
+  const valid = st.itemId === '__new' || !!getItem(st.itemId);
+  if (!valid) {
+    st.itemId = S.items[0] ? S.items[0].id : '__new';
+    const it = st.itemId !== '__new' ? getItem(st.itemId) : null;
+    st.qty = it && n(it.qty) > 0 ? n(it.qty) : 10;
+    st.cost = it ? n(it.cost) : 0;
+    st.inbound = it ? n(it.inbound) : 0;
+    st.prep = it ? n(it.prep) : 0;
+    st.price = it ? n(it.price) : 0;
+    st.channel = it && it.channel ? it.channel : 'avito';
+  }
+  if (!st.channel || !S.channels.some((c) => c.id === st.channel)) st.channel = 'avito';
+  ['qty', 'cost', 'inbound', 'prep', 'price'].forEach((k) => {
+    if (st[k] == null || isNaN(n(st[k]))) st[k] = 0;
+  });
+  return st;
+}
+
+function fillSupplyFromItem(id) {
+  const st = supplyState();
+  st.itemId = id;
+  const it = id !== '__new' ? getItem(id) : null;
+  st.qty = it && n(it.qty) > 0 ? n(it.qty) : 10;
+  st.cost = it ? n(it.cost) : 0;
+  st.inbound = it ? n(it.inbound) : 0;
+  st.prep = it ? n(it.prep) : 0;
+  st.price = it ? n(it.price) : 0;
+  st.channel = it && it.channel ? it.channel : 'avito';
+}
+
+function supplyCalc() {
+  const st = supplyState();
+  const it = st.itemId !== '__new' ? getItem(st.itemId) : null;
+  const ch = channelOf(st.channel);
+  const qty = Math.max(0, n(st.qty));
+  const unit = Object.assign(baseItem({}), {
+    name: it ? it.name : 'Новый товар',
+    cost: Math.max(0, n(st.cost)),
+    inbound: Math.max(0, n(st.inbound)),
+    prep: Math.max(0, n(st.prep)),
+    price: Math.max(0, n(st.price)),
+    channel: st.channel,
+    velocity: it ? n(it.velocity) : 0,
+    flags: it ? it.flags : newFlags(['photos', 'description', 'delivery', 'fastReply'])
+  });
+  const c = calcItem(unit, ch);
+  return {
+    st, it, ch, qty, unit, c,
+    invest: c.invested * qty,
+    revenue: c.gross * qty,
+    profit: c.profit * qty,
+    be: breakevenPrice(unit, ch),
+    maxCost: maxCostFor(unit, ch, unit.price, n(S.settings.targetMargin)),
+    known: n(unit.cost) > 0 && unit.price > 0
+  };
+}
+
+function supplyVerdict(x) {
+  if (!x.known) return { cls: 'warn', text: 'Укажите закупку и цену продажи — тогда посчитаю прибыль.' };
+  if (x.c.profit < 0) return { cls: 'bad', text: `Убыток ${money(-x.c.profit)} с каждой штуки. Чтобы выйти в ноль, нужна цена ${money(x.be)}.` };
+  if (x.c.margin < 10) return { cls: 'warn', text: `Прибыль есть, но тонкая: маржа ${pctf(x.c.margin)}. Скидка или возврат уведут в минус.` };
+  return { cls: 'good', text: `Рабочая поставка: маржа ${pctf(x.c.margin)}, прибыль со всей партии ${money(x.profit)}.` };
+}
+
+function supplyResultsHtml() {
+  const x = supplyCalc();
+  const v = supplyVerdict(x);
+  return `
+    <div class="plan-cards">
+      <div class="plan-card"><h4>Вложить в поставку</h4><div class="pc-val">${money(x.invest)}</div><div class="pc-sub">${nf.format(x.qty)} шт × ${money(x.c.invested)}</div></div>
+      <div class="plan-card"><h4>Выручка</h4><div class="pc-val">${money(x.revenue)}</div><div class="pc-sub">${nf.format(x.qty)} шт × ${money(x.c.gross)}</div></div>
+      <div class="plan-card ${x.profit >= 0 ? 'good' : 'bad'}"><h4>Прибыль</h4><div class="pc-val ${x.profit >= 0 ? 'pos' : 'neg'}">${money(x.profit)}</div><div class="pc-sub">маржа ${pctf(x.c.margin)}${x.invest > 0 ? ' · ROI ' + pctf((x.profit / x.invest) * 100) : ''}</div></div>
+      <div class="plan-card"><h4>С одной штуки</h4><div class="pc-val">${money(x.c.profit)}</div><div class="pc-sub">безубыток ${money(x.be)}</div></div>
+    </div>
+    <div class="hintline" style="margin-top:10px">Максимальная закупка при целевой марже ${n(S.settings.targetMargin)}% — <b>${money(x.maxCost)}</b>/шт. «Вложить» — закупка + доставка + подготовка; прибыль — уже после издержек площадки и налога.</div>
+    <div class="verdict ${v.cls}">${v.text}</div>`;
+}
+
+function supplyFormHtml() {
+  const st = supplyState();
+  const opts = S.items.filter((it) => !it.gone)
+    .map((it) => `<option value="${it.id}" ${it.id === st.itemId ? 'selected' : ''}>${esc(it.name)}</option>`).join('');
+  return `<div class="supply-form">
+    <label class="field" style="grid-column:1/-1"><span>Товар</span>
+      <select data-supply="itemId">
+        <option value="__new" ${st.itemId === '__new' ? 'selected' : ''}>Новый товар — считать без склада</option>
+        ${opts}
+      </select>
+    </label>
+    <label class="field"><span>Количество, шт</span><input type="number" min="0" step="1" value="${n(st.qty)}" data-supply="qty"/></label>
+    <label class="field"><span>Закупка за шт, ₽</span><input type="number" min="0" step="10" value="${n(st.cost)}" data-supply="cost"/></label>
+    <label class="field"><span>Доставка за шт, ₽</span><input type="number" min="0" step="10" value="${n(st.inbound)}" data-supply="inbound"/></label>
+    <label class="field"><span>Подготовка за шт, ₽</span><input type="number" min="0" step="10" value="${n(st.prep)}" data-supply="prep"/></label>
+    <label class="field"><span>Цена продажи, ₽</span><input type="number" min="0" step="10" value="${n(st.price)}" data-supply="price"/></label>
+    <label class="field"><span>Площадка</span>
+      <select data-supply="channel">${S.channels.map((ch) => `<option value="${ch.id}" ${ch.id === st.channel ? 'selected' : ''}>${esc(ch.name)}</option>`).join('')}</select>
+    </label>
+  </div>`;
+}
+
+function reactState() {
+  if (!S.ui.react || typeof S.ui.react !== 'object') S.ui.react = {};
+  const r = S.ui.react;
+  if (!getItem(r.itemId)) r.itemId = S.items[0] ? S.items[0].id : null;
+  if (r.price == null || isNaN(n(r.price))) {
+    const it = getItem(r.itemId);
+    r.price = it ? n(it.price) : 0;
+  }
+  return r;
+}
+
+function buyerReactions(it, price) {
+  const ch = channelOf(it.channel);
+  const be = breakevenPrice(it, ch);
+  const anchor = priceAnchor(it);
+  const delta = anchor > 0 ? (price - anchor) / anchor : 0;
+  const qty = n(it.qty);
+  const out = [];
+
+  if (!(price > 0)) {
+    out.push({ type: 'info', icon: '?', t: '«Сколько стоит?»', x: 'Цена не указана — покупатель не станет спрашивать, он просто пролистает объявление.' });
+  } else if (price < be) {
+    out.push({ type: 'bad', icon: '!', t: '«Слишком дёшево — наверное, брак»', x: `Цена ${money(price)} ниже безубытка ${money(be)}. Покупатель заподозрит подвох, а вы потеряете ${money(be - price)} с каждой продажи.` });
+  } else if (delta > 0.15) {
+    out.push({ type: 'bad', icon: '↑', t: '«Дорого, найду дешевле»', x: `На ${Math.round(delta * 100)}% выше вашей обычной цены. Оправдать можно только гарантией, комплектом или срочностью.` });
+  } else if (delta > 0.05) {
+    out.push({ type: 'warn', icon: '~', t: '«Дороговато, но если с гарантией — подумаю»', x: 'Небольшой запас есть. Подчеркните состояние, комплект и возврат — иначе выберут дешевле.' });
+  } else if (delta < -0.12) {
+    out.push({ type: 'info', icon: '↓', t: '«Почему так дёшево?»', x: `Заметно ниже вашей обычной цены. Можно поднять до ${money(Math.round(anchor))} без потери интереса.` });
+  } else {
+    out.push({ type: 'good', icon: '✓', t: '«Цена нормальная, сравню с другими»', x: 'В пределах ожиданий. Дальше решают фото, описание и продавец.' });
+  }
+
+  const room = price > 0 ? Math.max(0, price - be) : 0;
+  out.push(room > 0
+    ? { type: 'warn', icon: '₽', t: '«Скиньте немного?»', x: `Можно уступить до ${money(room)} и остаться в нуле. Ставьте цену на 5–7% выше желаемой — торг почти гарантирован.` }
+    : { type: 'bad', icon: '₽', t: '«Скиньте немного?»', x: 'Торговаться нечем: любая скидка уводит в минус. Держите цену твёрдо.' });
+
+  const missing = FLAGS.filter((f) => !(it.flags && it.flags[f.key]));
+  if (missing.length) {
+    out.push({ type: 'warn', icon: '◻', t: '«А не обман?»', x: `Не хватает: ${missing.slice(0, 3).map((f) => f.label.toLowerCase()).join(', ')}. Это снижает доверие сильнее, чем цена.` });
+  } else {
+    out.push({ type: 'good', icon: '✓', t: '«Продавец выглядит надёжно»', x: 'Фото, описание, отзывы и гарантия закрывают главные сомнения.' });
+  }
+
+  out.push(qty > 0
+    ? { type: 'good', icon: '▣', t: '«Есть в наличии?»', x: `Да, ${nf.format(qty)} шт. Напишите «в наличии, отправка сегодня» — это ускоряет решение.` }
+    : { type: 'bad', icon: '▣', t: '«А когда будет?»', x: 'Остаток нулевой — покупатель уйдёт к тому, у кого товар есть сейчас.' });
+
+  out.push(it.flags && it.flags.delivery
+    ? { type: 'good', icon: '⇢', t: '«Как получу?»', x: 'Доставка указана — последний барьер снят.' }
+    : { type: 'warn', icon: '⇢', t: '«А доставка сколько?»', x: 'Способ и срок не указаны. Покупатель закроет объявление, чтобы не выяснять это в переписке.' });
+
+  return out;
+}
+
+function reactResultsHtml() {
+  const r = reactState();
+  const it = getItem(r.itemId);
+  if (!it) return '<p class="muted small">Добавьте товар, чтобы увидеть реакции.</p>';
+  const price = Math.max(0, n(r.price));
+  const c = calcItem(it, channelOf(it.channel), price);
+  const list = buyerReactions(it, price);
+  return `
+    <div class="hintline" style="margin-bottom:10px">При цене ${money(price)}: прибыль ${money(c.profit)}/шт · маржа ${pctf(c.margin)}</div>
+    <div class="react-list">
+      ${list.map((x) => `<div class="react ${x.type}"><div class="q">${x.icon} ${esc(x.t)}</div><div class="a">${esc(x.x)}</div></div>`).join('')}
+    </div>`;
+}
+
 function renderDashboard() {
   const host = $('#view-dashboard');
   if (!S.items.length) { host.innerHTML = emptyState(); return; }
 
   const t = totals();
   const p = purchasePlan();
-  const rows = p.rows;
-  const insights = buildInsights();
-  const sf = stockForecast(6);
+  const rs = reactState();
 
-  let sumQty = 0, sumDaily = 0;
-  rows.forEach((r) => { sumQty += r.si.qty; sumDaily += r.si.daily; });
-  const coverDays = sumDaily > 0 ? sumQty / sumDaily : null;
-
-  const sorted = rows.slice().sort((a, b) => b.si.qty * b.price - a.si.qty * a.price);
-  let bars = sorted.slice(0, 7).map((r, i) => ({ label: r.it.name, value: r.si.qty * r.price, color: CHART_COLORS[i % CHART_COLORS.length] }));
-  if (sorted.length > 7) bars.push({ label: 'Остальные', value: sorted.slice(7).reduce((s, r) => s + r.si.qty * r.price, 0), color: '#64748b' });
-
-  const byCat = {};
-  rows.forEach((r) => { if (r.si.qty > 0) byCat[r.it.category || 'Прочее'] = (byCat[r.it.category || 'Прочее'] || 0) + r.si.qty; });
-  const donut = Object.entries(byCat).sort((a, b) => b[1] - a[1]).slice(0, 6)
-    .map(([label, value], i) => ({ label, value, color: CHART_COLORS[i % CHART_COLORS.length] }));
-  const donutTotal = donut.reduce((s, x) => s + x.value, 0) || 1;
-
-  const focus = rows.filter((r) => r.verdict !== 'ok' && r.verdict !== 'wait')
-    .sort((a, b) => b.priority - a.priority || a.si.days - b.si.days)
-    .slice(0, 6);
+  const top = S.items.filter((it) => !it.gone && n(it.qty) > 0 && n(it.cost) > 0)
+    .map((it) => ({ it, val: n(it.qty) * n(it.cost) }))
+    .sort((a, b) => b.val - a.val)
+    .slice(0, 4);
 
   host.innerHTML = `
     ${syncStrip()}
-    <div class="grid kpi" style="margin-bottom:14px">
-      <div class="kpi"><div class="k-label">На складе</div><div class="k-val">${nf.format(t.units)} шт</div><div class="k-sub">${rows.filter((r) => r.si.qty > 0).length} из ${rows.length} позиций</div></div>
-      <div class="kpi"><div class="k-label">Стоимость склада</div><div class="k-val">${money(t.cost)}</div><div class="k-sub">${p.missingCost.length ? `у ${p.missingCost.length} нет закупки` : 'остаток × закупка'}</div></div>
-      <div class="kpi"><div class="k-label">Потенциал прибыли</div><div class="k-val ${t.profit >= 0 ? 'pos' : 'neg'}">${money(t.profit)}</div><div class="k-sub">маржа ${pctf(t.margin)}</div></div>
-      <div class="kpi"><div class="k-label">Нужно закупить</div><div class="k-val warn">${nf.format(p.needUnits)} шт</div><div class="k-sub">${money(p.needMoney)} по плану</div></div>
-      <div class="kpi"><div class="k-label">Нет в наличии</div><div class="k-val ${p.outStock.length ? 'neg' : 'pos'}">${p.outStock.length}</div><div class="k-sub">${p.over.length} с излишком</div></div>
-      <div class="kpi"><div class="k-label">Покрытие</div><div class="k-val">${coverDays == null ? '—' : Math.round(coverDays) + ' дн'}</div><div class="k-sub">при текущей скорости</div></div>
+
+    <div class="card simple-hero">
+      <div class="card-head">Склад сейчас <span class="hint">остаток × закупка</span></div>
+      <div class="hero-value">${money(t.cost)}</div>
+      <div class="hero-sub">${nf.format(t.units)} шт · ${S.items.filter((i) => !i.gone).length} позиций</div>
+      ${p.missingCost.length ? `<div class="verdict warn">У ${p.missingCost.length} позиций не указана закупка — они не входят в сумму. <button class="btn sm ghost" data-action="go" data-view="stock" style="margin-left:6px">Заполнить</button></div>` : ''}
+      ${top.length ? `<div class="mini-list">${top.map((x) => `<div class="mini-row"><span>${esc(x.it.name)}</span><b>${nf.format(n(x.it.qty))} × ${money(n(x.it.cost))} = ${money(x.val)}</b></div>`).join('')}</div>` : ''}
+      <div class="hintline">В сумму входит только закупка. Доставка и подготовка считаются в прибыли, а не в стоимости склада.</div>
     </div>
 
-    <div class="grid two">
-      <div class="card">
-        <div class="card-head">Что стоит на складе <span class="hint">в ценах продажи</span></div>
-        <canvas id="cProfit" class="chart-lg"></canvas>
-      </div>
-      <div class="card">
-        <div class="card-head">Структура склада <span class="hint">${nf.format(t.units)} шт</span></div>
-        ${donut.length ? `<div class="donut-wrap">
-          <canvas id="cDonut"></canvas>
-          <div class="legend">
-            ${donut.map((d) => `<div class="lg"><span class="dot" style="background:${d.color}"></span>${esc(d.label)}<b>${nf.format(d.value)} шт</b></div>`).join('')}
-            <div class="lg" style="border-top:1px solid #18222d;padding-top:7px;margin-top:2px"><span class="dot" style="background:transparent"></span>Позиций без остатка<b class="${p.outStock.length ? 'warn' : ''}">${p.outStock.length}</b></div>
-          </div>
-        </div>` : '<p class="muted small">Склад пуст — вся витрина «нет в наличии».</p>'}
-      </div>
+    <div class="card" style="margin-top:14px">
+      <div class="card-head">Будущая поставка <span class="hint">посчитайте до заказа</span></div>
+      ${supplyFormHtml()}
+      <div id="supplyResults" style="margin-top:14px">${supplyResultsHtml()}</div>
     </div>
 
-    <div class="grid two" style="margin-top:14px">
-      <div class="card">
-        <div class="card-head">Распродажа склада <span class="hint">6 месяцев</span></div>
-        <canvas id="cCash" style="height:250px"></canvas>
-        <div class="hintline">Выручка, которую склад даст при текущей скорости продаж. Если линия не падает — скорость не определяется: нужна история остатков или ручная скорость.</div>
+    <div class="card" style="margin-top:14px">
+      <div class="card-head">Реакции покупателя <span class="hint">на товар и цену</span></div>
+      <div class="supply-form">
+        <label class="field" style="grid-column:1/-1"><span>Товар</span>
+          <select data-react="itemId">
+            ${S.items.filter((it) => !it.gone).map((it) => `<option value="${it.id}" ${it.id === rs.itemId ? 'selected' : ''}>${esc(it.name)} — ${money(it.price)}</option>`).join('')}
+          </select>
+        </label>
+        <label class="field"><span>Проверяемая цена, ₽</span><input type="number" min="0" step="10" value="${n(rs.price)}" data-react="price"/></label>
       </div>
-      <div class="card">
-        <div class="card-head">Вердикт агента <span class="hint">${insights.length} наблюдений</span></div>
-        <div>${insights.map((i) => `
-          <div class="insight ${i.type}">
-            <div class="ic">${i.icon}</div>
-            <div><div class="it">${esc(i.title)}</div><div class="ix">${esc(i.text)}</div></div>
-          </div>`).join('')}
-        </div>
-        <div style="margin-top:13px"><button class="btn sm" data-action="go" data-view="purchase">План закупа →</button></div>
-      </div>
+      <div id="reactResults" style="margin-top:12px">${reactResultsHtml()}</div>
     </div>
 
-    <div class="section-title" style="margin-top:24px">Что требует внимания</div>
-    <div class="card" style="padding:0;overflow:hidden">
-      ${focus.length ? `<table class="tbl compact">
-        <thead><tr><th>Товар</th><th class="num">Остаток</th><th>Покрытие</th><th>Вердикт</th><th class="num">Закупить</th><th class="num">Макс. закуп</th></tr></thead>
-        <tbody>
-        ${focus.map((r) => {
-          const covPct = r.si.daily > 0 ? Math.min(100, (r.si.days / Math.max(1, r.si.cover)) * 100) : 0;
-          return `<tr>
-            <td data-label="Товар">${esc(r.it.name)}<div class="small muted">${esc(r.ch.name)} · ${nf1.format(r.si.vel.v)} шт/мес</div></td>
-            <td class="num" data-label="Остаток">${nf.format(r.si.qty)}</td>
-            <td data-label="Покрытие"><div class="cov"><div class="bar"><i class="${r.si.days <= r.si.lead ? 'bad' : r.si.days <= r.si.lead + r.si.safe ? 'warn' : 'ok'}" style="width:${r.si.days === Infinity ? 100 : Math.max(4, covPct)}%"></i></div><span class="mini">${r.si.days === Infinity ? '∞' : Math.round(r.si.days) + ' д'}</span></div></td>
-            <td data-label="Вердикт"><span class="${r.cls}">${esc(r.label)}</span></td>
-            <td class="num" data-label="Закупить">${r.reco > 0 ? r.reco + ' шт' : '—'}</td>
-            <td class="num" data-label="Макс. закуп">${r.maxCostTarget > 0 ? money(r.maxCostTarget) : '—'}</td>
-          </tr>`;
-        }).join('')}
-        </tbody>
-      </table>` : '<p class="muted small" style="padding:16px">Всё в норме: закупать срочно нечего.</p>'}
+    <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn sm" data-action="go" data-view="stock">Весь склад →</button>
+      <button class="btn sm" data-action="go" data-view="purchase">Подробный план закупа →</button>
     </div>`;
 
-  activeCharts = [
-    () => drawHBars($('#cProfit'), bars, { short: true, labelW: 190 }),
-    () => drawDonut($('#cDonut'), donut, nf.format(donutTotal), 'единиц'),
-    () => drawLine($('#cCash'), ['сейчас', '1 мес', '2 мес', '3 мес', '4 мес', '5 мес'], [{ values: sf.rev, color: '#4ade80' }], { fill: true })
-  ];
+  activeCharts = [];
 }
 
 /* ---------- Склад ---------- */
@@ -3269,6 +3422,27 @@ document.addEventListener('click', (e) => {
 
 document.addEventListener('input', (e) => {
   const el = e.target;
+  if (el.dataset && el.dataset.supply) {
+    const k = el.dataset.supply;
+    if (k !== 'itemId') {
+      const st = supplyState();
+      st[k] = k === 'channel' ? el.value : Math.max(0, n(el.value));
+      save();
+      const host = $('#supplyResults');
+      if (host) host.innerHTML = supplyResultsHtml();
+    }
+    return;
+  }
+  if (el.dataset && el.dataset.react) {
+    if (el.dataset.react === 'price') {
+      const r = reactState();
+      r.price = Math.max(0, n(el.value));
+      save();
+      const host = $('#reactResults');
+      if (host) host.innerHTML = reactResultsHtml();
+    }
+    return;
+  }
   if (el.id === 'stockSearch') {
     S.ui.stockSearch = el.value;
     applyStockFilter();
@@ -3300,6 +3474,29 @@ document.addEventListener('input', (e) => {
 
 document.addEventListener('change', (e) => {
   const el = e.target;
+
+  if (el.dataset && el.dataset.supply === 'itemId') {
+    fillSupplyFromItem(el.value);
+    save();
+    renderDashboard();
+    return;
+  }
+  if (el.dataset && el.dataset.supply === 'channel') {
+    supplyState().channel = el.value;
+    save();
+    const host = $('#supplyResults');
+    if (host) host.innerHTML = supplyResultsHtml();
+    return;
+  }
+  if (el.dataset && el.dataset.react === 'itemId') {
+    const r = reactState();
+    r.itemId = el.value;
+    const it = getItem(el.value);
+    r.price = it ? n(it.price) : 0;
+    save();
+    renderDashboard();
+    return;
+  }
 
   if (el.id === 'buyerItem') {
     S.ui.buyerItemId = el.value; save(); renderBuyer(); return;
